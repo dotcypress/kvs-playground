@@ -286,7 +286,6 @@ dependencies = [
 [[package]]
 name = "kvs"
 version = "0.0.1"
-source = "git+https://github.com/dotcypress/kvs?branch=main#4d442c5dd3c62b722982690358b12d47ba6a2322"
 dependencies = [
  "byteorder",
  "embedded-hal",

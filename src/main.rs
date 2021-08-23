@@ -18,7 +18,7 @@ use hal::spi;
 use hal::stm32;
 use hal::timer::*;
 use hal::watchdog::*;
-use kvs::adapters::fram;
+use kvs::adapters::spi::SpiStoreAdapter;
 use kvs::*;
 use ushell::{
     autocomplete::StaticAutocomplete, control, history::LRUHistory, Input, ShellError, UShell,
@@ -55,7 +55,7 @@ pub type ShellLink = Serial<stm32::USART2, BasicConfig>;
 pub type Shell = UShell<ShellLink, StaticAutocomplete<9>, LRUHistory<32, 4>, 32>;
 pub type StoreSPI = spi::Spi<hal::stm32::SPI1, (PA1<Analog>, PA6<Analog>, PA7<Analog>)>;
 pub type StoreCS = PA5<hal::gpio::Output<PushPull>>;
-pub type Store = KVStore<fram::FramStoreAdapter<StoreSPI, StoreCS>, KVS_BUCKETS, KVS_SLOTS>;
+pub type Store = KVStore<SpiStoreAdapter<StoreSPI, StoreCS, 3>, KVS_BUCKETS, KVS_SLOTS>;
 
 #[rtic::app(device = hal::stm32, peripherals = true)]
 const APP: () = {
@@ -102,7 +102,7 @@ const APP: () = {
             &mut rcc,
         );
 
-        let mr45v100a = fram::FramStoreAdapter::new(fram_spi, fram_spi_cs, 0, 131_072);
+        let mr45v100a = SpiStoreAdapter::new(fram_spi, fram_spi_cs, 0, 131_072);
         let store_opts = StoreOptions::new(KVS_MAGIC, KVS_MAX_HOPS).overwrite(true);
 
         let store = Store::open(mr45v100a, store_opts).expect("Failed to open store");
