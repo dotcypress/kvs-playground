@@ -103,9 +103,9 @@ const APP: () = {
         );
 
         let mr45v100a = SpiStoreAdapter::new(fram_spi, fram_spi_cs, 0, 131_072);
-        let store_opts = StoreOptions::new(KVS_MAGIC, KVS_MAX_HOPS).overwrite(true);
+        let store_opts = StoreOptions::new(KVS_MAGIC, KVS_MAX_HOPS);
 
-        let store = Store::open(mr45v100a, store_opts).expect("Failed to open store");
+        let store = Store::open(mr45v100a, store_opts, true).expect("Failed to open store");
 
         let blink_enabled = true;
         let mut timer = ctx.device.TIM2.timer(&mut rcc);
@@ -179,7 +179,7 @@ const APP: () = {
                             shell.write_str(CR).ok();
                             for key_ref in store.keys() {
                                 let key = core::str::from_utf8(key_ref.key()).unwrap();
-                                write!(shell, "{}{}", key, CR).ok();
+                                write!(shell, "{} - {} bytes{}", key, key_ref.val_len(), CR).ok();
                             }
                         }
                         "get" if !args.is_empty() => {
