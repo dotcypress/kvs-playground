@@ -18,11 +18,13 @@ use hal::spi;
 use hal::stm32;
 use hal::timer::*;
 use hal::watchdog::*;
-use kvs::adapters::spi::SpiStoreAdapter;
+use kvs::adapters::paged::PagedAdapter;
+use kvs::adapters::spi::{SpiAdapterConfig, SpiStoreAdapter};
 use kvs::*;
-use ushell::{
-    autocomplete::StaticAutocomplete, control, history::LRUHistory, Input, ShellError, UShell,
-};
+use ushell::autocomplete::StaticAutocomplete;
+use ushell::control;
+use ushell::history::LRUHistory;
+use ushell::{Input, ShellError, UShell};
 
 pub use defmt_rtt as _;
 
@@ -55,7 +57,8 @@ pub type ShellLink = Serial<stm32::USART2, BasicConfig>;
 pub type Shell = UShell<ShellLink, StaticAutocomplete<9>, LRUHistory<32, 4>, 32>;
 pub type StoreSPI = spi::Spi<hal::stm32::SPI1, (PA1<Analog>, PA6<Analog>, PA7<Analog>)>;
 pub type StoreCS = PA5<hal::gpio::Output<PushPull>>;
-pub type Store = KVStore<SpiStoreAdapter<StoreSPI, StoreCS, 3>, KVS_BUCKETS, KVS_SLOTS>;
+pub type Store =
+    KVStore<PagedAdapter<SpiStoreAdapter<StoreSPI, StoreCS, 3>, 256>, KVS_BUCKETS, KVS_SLOTS>;
 
 #[rtic::app(device = hal::stm32, peripherals = true)]
 const APP: () = {
@@ -102,10 +105,10 @@ const APP: () = {
             &mut rcc,
         );
 
-        let mr45v100a = SpiStoreAdapter::new(fram_spi, fram_spi_cs, 0, 131_072);
-        let store_opts = StoreOptions::new(KVS_MAGIC, KVS_MAX_HOPS);
-
-        let store = Store::open(mr45v100a, store_opts, true).expect("Failed to open store");
+        let adapter_cfg = SpiAdapterConfig::new(131_072);
+        let adapter = PagedAdapter::new(SpiStoreAdapter::new(fram_spi, fram_spi_cs, adapter_cfg));
+        let store_cfg = StoreConfig::new(KVS_MAGIC, KVS_MAX_HOPS);
+        let store = Store::open(adapter, store_cfg, true).expect("Failed to open store");
 
         let blink_enabled = true;
         let mut timer = ctx.device.TIM2.timer(&mut rcc);
