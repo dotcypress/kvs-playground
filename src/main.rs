@@ -16,7 +16,7 @@ use hal::prelude::*;
 use hal::serial::*;
 use hal::spi;
 use hal::stm32;
-use hal::timer::*;
+use hal::timer::{stopwatch::Stopwatch, *};
 use hal::watchdog::*;
 use kvs::adapters::paged::PagedAdapter;
 use kvs::adapters::spi::{SpiAdapterConfig, SpiStoreAdapter};
@@ -51,7 +51,7 @@ CONTROL KEYS:\r\n\
 pub const KVS_MAGIC: u32 = 0x0d0d;
 pub const KVS_BUCKETS: usize = 256;
 pub const KVS_SLOTS: usize = 8;
-pub const KVS_MAX_HOPS: usize = 16;
+pub const KVS_MAX_HOPS: usize = 64;
 
 pub type ShellLink = Serial<stm32::USART2, BasicConfig>;
 pub type Shell = UShell<ShellLink, StaticAutocomplete<9>, LRUHistory<32, 4>, 32>;
@@ -64,22 +64,25 @@ pub type Store =
 const APP: () = {
     struct Resources {
         led: PC15<Output<OpenDrain>>,
-        timer: Timer<stm32::TIM2>,
+        timer: Timer<stm32::TIM3>,
         store: Store,
         shell: Shell,
         blink_enabled: bool,
         watchdog: IndependedWatchdog,
+        stopwatch: Stopwatch<stm32::TIM2>,
     }
 
     #[init]
     fn init(ctx: init::Context) -> init::LateResources {
-        let watchdog = ctx.device.IWDG.constrain();
         let mut rcc = ctx.device.RCC.freeze(hal::rcc::Config::pll());
         defmt::info!("booting...");
 
         let port_a = ctx.device.GPIOA.split(&mut rcc);
         let port_c = ctx.device.GPIOC.split(&mut rcc);
+
         let led = port_c.pc15.into_open_drain_output();
+        let stopwatch = ctx.device.TIM2.stopwatch(&mut rcc);
+        let watchdog = ctx.device.IWDG.constrain();
 
         let mut serial = ctx
             .device
@@ -101,7 +104,7 @@ const APP: () = {
         let fram_spi = ctx.device.SPI1.spi(
             (port_a.pa1, port_a.pa6, port_a.pa7),
             spi::MODE_0,
-            4.mhz(),
+            8.mhz(),
             &mut rcc,
         );
 
@@ -111,7 +114,7 @@ const APP: () = {
         let store = Store::open(adapter, store_cfg, true).expect("Failed to open store");
 
         let blink_enabled = true;
-        let mut timer = ctx.device.TIM2.timer(&mut rcc);
+        let mut timer = ctx.device.TIM3.timer(&mut rcc);
         timer.start(2.hz());
         timer.listen();
 
@@ -130,10 +133,11 @@ const APP: () = {
             store,
             blink_enabled,
             watchdog,
+            stopwatch,
         }
     }
 
-    #[task(binds = TIM2, priority = 2, resources = [timer, led, blink_enabled])]
+    #[task(binds = TIM3, priority = 2, resources = [timer, led, blink_enabled])]
     fn timer_tick(ctx: timer_tick::Context) {
         let timer_tick::Resources {
             led,
@@ -148,10 +152,11 @@ const APP: () = {
         timer.clear_irq();
     }
 
-    #[task(binds = USART2, priority = 1, resources = [shell, blink_enabled, store, watchdog])]
+    #[task(binds = USART2, priority = 1, resources = [shell, blink_enabled, store, stopwatch, watchdog])]
     fn serial_data(ctx: serial_data::Context) {
         let shell = ctx.resources.shell;
         let store = ctx.resources.store;
+        let stopwatch = ctx.resources.stopwatch;
         let watchdog = ctx.resources.watchdog;
         let mut blink_enabled = ctx.resources.blink_enabled;
 
@@ -185,16 +190,42 @@ const APP: () = {
                                 write!(shell, "{} - {} bytes{}", key, key_ref.val_len(), CR).ok();
                             }
                         }
-                        "get" if !args.is_empty() => {
+                        "reset-store" => {
+                            store.reset().ok();
+                            shell.write_str(CR).ok();
+                        }
+                        "fill-store" => {
+                            for x in 0..20 {
+                                for y in 0..10 {
+                                    store.insert(&[b'a' + x, b'a' + y], b"lorem ipsum dolor sit amet, consectetur adipiscing elit").unwrap();
+                                }
+                            }
+                            shell.write_str(CR).ok();
+                        }
+                        "get" | "cat" if !args.is_empty() => {
+                            stopwatch.reset();
+                            let now = stopwatch.now();
                             let mut scratch = [0_u8; 64];
                             match store.load(args.as_bytes(), &mut scratch) {
                                 Ok(bucket) => {
                                     let val = &scratch[..bucket.val_len()];
                                     let val = from_utf8(val).unwrap_or("--mailformed--");
-                                    write!(shell, "{0:}{1:}{0:}", CR, val).ok();
+                                    let lookup_time_us = stopwatch.elapsed(now);
+                                    write!(
+                                        shell,
+                                        "{0:}OK; lookup time: {1:} us{0:}{2:}{0:}",
+                                        CR, lookup_time_us.0, val
+                                    )
+                                    .ok();
                                 }
                                 Err(err) => {
-                                    write!(shell, "{0:}{1:?}{0:}", CR, err).ok();
+                                    let lookup_time_us = stopwatch.elapsed(now);
+                                    write!(
+                                        shell,
+                                        "{0:}{1:?}; lookup time: {2:} us{0:}",
+                                        CR, err, lookup_time_us.0
+                                    )
+                                    .ok();
                                 }
                             }
                         }
@@ -208,9 +239,18 @@ const APP: () = {
                         },
                         "set" => match args.split_once(" ") {
                             Some((key, val)) if !key.is_empty() && !val.is_empty() => {
+                                stopwatch.reset();
+                                let now = stopwatch.now();
+
                                 match store.insert(key.as_bytes(), val.as_bytes()) {
                                     Ok(_) => {
-                                        shell.write_str(CR).ok();
+                                        let insert_time_us = stopwatch.elapsed(now);
+                                        write!(
+                                            shell,
+                                            "{0:}OK; insert time: {1:} us{0:}",
+                                            CR, insert_time_us.0
+                                        )
+                                        .ok();
                                     }
                                     Err(err) => {
                                         write!(shell, "{0:}{1:?}{0:}", CR, err).ok();
