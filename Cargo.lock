@@ -285,7 +285,9 @@ dependencies = [
 
 [[package]]
 name = "kvs"
-version = "0.0.1"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c75dedd55cd5d36e1289281e9650851571c33be6e3a2fe8e9c7c278138e995ca"
 dependencies = [
  "byteorder",
  "embedded-hal",

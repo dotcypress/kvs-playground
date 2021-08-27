@@ -52,9 +52,15 @@ pub const KVS_MAGIC: u32 = 0x0d0d;
 pub const KVS_BUCKETS: usize = 256;
 pub const KVS_SLOTS: usize = 8;
 pub const KVS_MAX_HOPS: usize = 64;
+pub const SHELL_COMMAND_MAX_LEN: usize = 64;
 
 pub type ShellLink = Serial<stm32::USART2, BasicConfig>;
-pub type Shell = UShell<ShellLink, StaticAutocomplete<9>, LRUHistory<32, 4>, 32>;
+pub type Shell = UShell<
+    ShellLink,
+    StaticAutocomplete<9>,
+    LRUHistory<SHELL_COMMAND_MAX_LEN, 4>,
+    SHELL_COMMAND_MAX_LEN,
+>;
 pub type StoreSPI = spi::Spi<hal::stm32::SPI1, (PA1<Analog>, PA6<Analog>, PA7<Analog>)>;
 pub type StoreCS = PA5<hal::gpio::Output<PushPull>>;
 pub type Store =
@@ -111,11 +117,14 @@ const APP: () = {
         let adapter_cfg = SpiAdapterConfig::new(131_072);
         let adapter = PagedAdapter::new(SpiStoreAdapter::new(fram_spi, fram_spi_cs, adapter_cfg));
         let store_cfg = StoreConfig::new(KVS_MAGIC, KVS_MAX_HOPS);
-        let store = Store::open(adapter, store_cfg, true).expect("Failed to open store");
+        let mut store = Store::open(adapter, store_cfg, true).expect("Failed to open store");
+        let mut scratch = [32];
+        store.load(b":freq", &mut scratch).ok();
 
+        let freq = scratch[0] as u32 - 31;
         let blink_enabled = true;
         let mut timer = ctx.device.TIM3.timer(&mut rcc);
-        timer.start(2.hz());
+        timer.start((freq * 2).hz());
         timer.listen();
 
         let autocomplete = StaticAutocomplete([
@@ -187,7 +196,7 @@ const APP: () = {
                             shell.write_str(CR).ok();
                             for key_ref in store.keys() {
                                 let key = core::str::from_utf8(key_ref.key()).unwrap();
-                                write!(shell, "{} - {} bytes{}", key, key_ref.val_len(), CR).ok();
+                                write!(shell, "{: >6}: {}{}", key_ref.val_len(), key, CR).ok();
                             }
                         }
                         "reset-store" => {
